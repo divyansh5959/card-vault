@@ -116,6 +116,88 @@ export function confirmSheet({ title, message, confirm = 'Confirm', danger = fal
   });
 }
 
+// Text input with a suggestion list underneath. A plain text field that never
+// shows a dropdown arrow; matches appear as you type and a tap fills the field.
+// getOptions() is called on every keystroke so the list can depend on other fields.
+let comboSeq = 0;
+export function combo({ getOptions, placeholder = '', value = '', onPick, max = 6, attrs = {} }) {
+  const id = `cb-${++comboSeq}`;
+  const input = h('input', {
+    class: 'field-input', type: 'text', autocomplete: 'off', autocorrect: 'off', spellcheck: 'false',
+    role: 'combobox', 'aria-autocomplete': 'list', 'aria-expanded': 'false', 'aria-controls': id, placeholder, ...attrs,
+  });
+  input.value = value;
+  const list = h('ul', { class: 'combo-list', id, role: 'listbox', hidden: true });
+  const wrap = h('div', { class: 'combo' }, input, list);
+  let items = [];
+  let active = -1;
+
+  const close = () => { list.hidden = true; input.setAttribute('aria-expanded', 'false'); active = -1; };
+  const pick = (v) => {
+    input.value = v;
+    close();
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    onPick && onPick(v);
+  };
+  const paint = () => {
+    const q = input.value.trim().toLowerCase();
+    const opts = getOptions();
+    // Prefix matches first, then word-start and substring matches.
+    const scored = opts.map((o) => {
+      const l = o.toLowerCase();
+      const words = l.split(/[\s().&-]+/);
+      const acr = words.filter(Boolean).map((w) => w[0]).join('');
+      const s = !q ? 3 : l.startsWith(q) ? 0 : words.some((w) => w.startsWith(q)) ? 1 : acr.startsWith(q) ? 1 : l.includes(q) ? 2 : -1;
+      return [s, o];
+    }).filter(([sc, o]) => sc >= 0 && o.toLowerCase() !== q);
+    scored.sort((a, b) => a[0] - b[0]);
+    items = scored.slice(0, max).map(([, o]) => o);
+    active = -1;
+    list.replaceChildren(...items.map((o, i) => h('li', {
+      class: 'combo-opt', role: 'option', id: `${id}-${i}`, 'aria-selected': 'false',
+      onpointerdown: (e) => { e.preventDefault(); pick(o); },
+    }, o)));
+    const open = items.length > 0 && document.activeElement === input;
+    list.hidden = !open;
+    input.setAttribute('aria-expanded', String(open));
+  };
+  const move = (d) => {
+    if (list.hidden || !items.length) return;
+    active = (active + d + items.length) % items.length;
+    [...list.children].forEach((li, i) => li.setAttribute('aria-selected', String(i === active)));
+    input.setAttribute('aria-activedescendant', `${id}-${active}`);
+  };
+  input.addEventListener('input', paint);
+  input.addEventListener('focus', paint);
+  input.addEventListener('blur', () => setTimeout(close, 120));
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); move(1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); move(-1); }
+    else if (e.key === 'Escape' && !list.hidden) { e.preventDefault(); e.stopPropagation(); close(); }
+    else if (e.key === 'Enter' && active >= 0) { e.preventDefault(); e.stopPropagation(); pick(items[active]); }
+  });
+  return { wrap, input, close, refresh: paint };
+}
+
+// Makes the keyboard's Enter/Next key move through `fields` in order instead
+// of submitting the form. The last field shows "Done" and closes the keyboard.
+export function chainFields(fields) {
+  const live = fields.filter(Boolean);
+  live.forEach((el, i) => {
+    if (el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') return;
+    el.setAttribute('enterkeyhint', i === live.length - 1 ? 'done' : 'next');
+    el.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' || e.defaultPrevented || e.isComposing) return;
+      e.preventDefault();
+      const next = live.slice(i + 1).find((x) => !x.disabled && x.offsetParent !== null);
+      if (next) next.focus(); else el.blur();
+    });
+  });
+}
+
+// First field in the list that is still empty (used for auto-advance).
+export const firstEmpty = (fields) => fields.find((el) => el && !el.disabled && !String(el.value || '').trim());
+
 export function pickFile(accept = 'application/json,.json,text/plain') {
   return new Promise((resolve) => {
     const input = h('input', { type: 'file', accept, class: 'sr-only' });

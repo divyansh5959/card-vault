@@ -31,11 +31,11 @@ const RULES = [
 
 // Tiers each network sells; offered as one-tap suggestions in the form.
 export const TIERS = {
-  visa: ['Classic', 'Gold', 'Platinum', 'Signature', 'Infinite'],
-  mastercard: ['Standard', 'Titanium', 'Platinum', 'World', 'World Elite'],
-  rupay: ['Classic', 'Platinum', 'Select'],
-  amex: ['Green', 'Gold', 'Platinum', 'Centurion'],
-  diners: ['Club', 'Premium', 'Privilege', 'Black'],
+  visa: ['Classic', 'Gold', 'Platinum', 'Signature', 'Infinite', 'Business'],
+  mastercard: ['Standard', 'Titanium', 'Platinum', 'World', 'World Elite', 'World Legend', 'Business'],
+  rupay: ['Classic', 'Platinum', 'Select', 'Business'],
+  amex: ['Green', 'Gold', 'Platinum', 'Platinum Reserve', 'Centurion'],
+  diners: ['Club', 'Premium', 'Privilege', 'Black', 'Black Metal'],
   discover: ['Standard'],
   jcb: ['Standard', 'Gold', 'Platinum'],
   maestro: ['Standard'],
@@ -196,7 +196,8 @@ export function matchesQuery(item, query) {
   const hay = [
     item.bank, acronym(item.bank), item.name, acronym(item.name), item.tier, item.holder,
     NETWORKS[item.network]?.label, item.network, item.notes, item.brand, acronym(item.brand), item.code,
-    n.slice(-4), n.slice(0, 6), item.amount ? String(item.amount) : '',
+    n.slice(-4), n.slice(0, 6), item.amount ? String(item.amount) : '', item.expiry,
+    item.kind === 'credit' ? 'credit' : item.kind === 'debit' ? 'debit' : '', item.fav ? 'favourite' : '',
   ].filter(Boolean).join(' \u0001 ').toLowerCase();
   return q.split(/\s+/).every((t) => hay.includes(t) || (/^\d+$/.test(t) && t.length >= 4 && n.includes(t)));
 }

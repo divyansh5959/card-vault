@@ -246,8 +246,10 @@ a { color: var(--accent); }
 .cc-label { font-size: 9px; letter-spacing: .14em; text-transform: uppercase; opacity: .7; white-space: nowrap; }
 .cc-val { font-family: var(--mono); font-size: clamp(12px, 4cqw, 15px); letter-spacing: .04em; white-space: nowrap; }
 .cc-val.holder { font-family: var(--font); font-weight: 600; text-transform: uppercase; overflow: hidden; text-overflow: ellipsis; letter-spacing: .06em; }
-.cc-net { flex: none; color: #fff; display: grid; place-items: end; }
-.cc-net.text { font-weight: 800; font-size: 13px; }
+.cc-net { flex: none; color: #fff; display: grid; justify-items: end; gap: 2px; }
+.cc-net-text { font-weight: 800; font-size: 13px; }
+.cc-tier { font-size: clamp(9px, 3cqw, 11px); font-weight: 700; letter-spacing: .12em; text-transform: uppercase; opacity: .9; white-space: nowrap; }
+.cc-star { color: #ffd66b; margin-right: 6px; letter-spacing: 0; }
 .cc-mark { height: clamp(20px, 8cqw, 30px); width: auto; max-width: 74px; }
 .cc .badge { position: absolute; right: 16px; top: 46px; }
 
@@ -529,3 +531,40 @@ textarea.field-input { resize: vertical; min-height: 64px; }
 }
 
 @media print { body { display: none; } }
+
+/* ---------- suggestion combo ---------- */
+.combo { position: relative; }
+.combo-list {
+  position: absolute; z-index: 30; left: 0; right: 0; top: calc(100% + 4px); margin: 0; padding: 4px; list-style: none;
+  background: var(--surface); border: 1px solid var(--line-2); border-radius: 12px; box-shadow: var(--shadow); max-height: 248px; overflow-y: auto;
+}
+.combo-opt { padding: 11px 12px; border-radius: 8px; cursor: pointer; font-size: 15px; }
+.combo-opt:hover, .combo-opt[aria-selected="true"] { background: var(--surface-2); }
+.field-hint.ok { color: var(--ok); }
+.field-hint.ok:empty { display: none; }
+
+/* ---------- filters ---------- */
+.chips.quick:empty { display: none; }
+.filter-btn { flex: none; gap: 6px; }
+.filter-btn.active { border-color: var(--text); }
+.badge-n { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--text); color: var(--bg); font-size: 11px; display: inline-grid; place-items: center; }
+.chip.dead { opacity: .45; }
+.chips.wrap { flex-wrap: wrap; overflow: visible; }
+.pills { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.pill-x { display: inline-flex; align-items: center; gap: 4px; height: 30px; padding: 0 8px 0 12px; border-radius: 999px; border: 0; background: var(--accent-soft); color: var(--text); font-size: 13px; font-weight: 600; }
+.pill-x .ico { width: 14px; height: 14px; opacity: .7; }
+.link-btn.small { font-size: 13px; padding: 6px; }
+.result-count { margin: 0; font-size: 13px; color: var(--text-3); }
+.filter-sheet { display: grid; gap: 18px; }
+.f-group { display: grid; gap: 8px; }
+.f-head { margin: 0; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-3); display: flex; gap: 8px; align-items: baseline; }
+.f-hint { text-transform: none; letter-spacing: 0; font-weight: 400; font-size: 12px; }
+.f-switch { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-radius: 12px; background: var(--surface-2); font-weight: 600; }
+.f-switch-text { display: inline-flex; gap: 8px; align-items: baseline; }
+.f-switch input { width: 20px; height: 20px; accent-color: var(--accent); }
+
+/* ---------- favourites and variant prompt ---------- */
+.gift-top-actions { display: flex; gap: 2px; }
+.fav.on .ico, .fav.on { color: var(--accent); }
+.fav.on .ico { fill: currentColor; }
+.variant-ask { display: grid; gap: 8px; padding: 12px 14px; border-radius: 14px; background: var(--accent-soft); }

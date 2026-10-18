@@ -12,8 +12,9 @@ import { wrapWithSecret, unwrapWithSecret, PIN_ITERATIONS, passwordScore, sugges
 import { prfLikelySupported, enrollPrf, unlockWithPrf } from './passkey.js';
 import { WORDS } from './data.js';
 import { renderTab, openEditor, tabSummary, crossTabHits, TAB_META } from './views.js';
+import { defaultFilters, normalizeFilters } from './filters.js';
 
-export const VERSION = '1.0.1';
+export const VERSION = '1.1.0';
 const AUTO_LOCK_OPTIONS = [[0, 'Immediately'], [1, 'After 1 minute'], [5, 'After 5 minutes'], [15, 'After 15 minutes']];
 const IDLE_LOCK_MS = 10 * 60 * 1000;
 const MAX_FREE_TRIES = 5;
@@ -24,11 +25,7 @@ const S = {
   vault: null,
   tab: 'credit',
   query: { credit: '', debit: '', gift: '' },
-  filters: {
-    credit: { bank: '', network: '', sort: 'bank' },
-    debit: { bank: '', network: '', sort: 'bank' },
-    gift: { status: 'live', brand: '', sort: 'expiry' },
-  },
+  filters: { credit: defaultFilters('credit'), debit: defaultFilters('debit'), gift: defaultFilters('gift') },
   revealed: new Set(),
   installPrompt: null,
   prf: false,
@@ -73,6 +70,14 @@ export const store = {
   async restore({ item, index }) {
     S.vault.items.splice(Math.min(index, S.vault.items.length), 0, item);
     await persist();
+  },
+  // Filters live in the encrypted vault (they name your banks), but changing
+  // them is not a data change, so it does not trigger the backup reminder.
+  async setFilters(tab, next) {
+    S.filters[tab] = normalizeFilters(tab, next);
+    S.vault.prefs.filters = { ...(S.vault.prefs.filters || {}), [tab]: S.filters[tab] };
+    refreshMain();
+    await writeVault(S.dek, S.vault);
   },
   async setHolder(name) {
     if (name && name !== S.vault.prefs.holder) { S.vault.prefs.holder = name; await persist(); }
@@ -167,6 +172,7 @@ function busyScreen(text) {
 async function finishCreate(pin, vault, backupPassword) {
   const res = await createVault(pin, localStorage, vault);
   S.dek = res.dek; S.meta = res.meta; S.vault = res.vault;
+  for (const t of ['credit', 'debit', 'gift']) S.filters[t] = defaultFilters(t);
   if (backupPassword) {
     S.meta.backupWrap = await makeBackupWrap(S.dek, backupPassword);
     S.meta.lastBackupAt = Date.now();
@@ -315,6 +321,8 @@ function showLock() {
 async function unlocked(dek) {
   S.vault = await readVault(dek);
   S.dek = dek;
+  const saved = S.vault.prefs.filters || {};
+  for (const t of ['credit', 'debit', 'gift']) S.filters[t] = normalizeFilters(t, saved[t]);
   S.meta.failed = { count: 0, until: 0 };
   saveMeta(S.meta);
   enterApp();

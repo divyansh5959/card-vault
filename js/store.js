@@ -57,7 +57,8 @@ export async function readVault(dek, ls = globalThis.localStorage) {
   const raw = ls.getItem(DATA_KEY);
   if (!raw) return emptyVault();
   const v = await openJSON(dek, JSON.parse(raw));
-  return { items: sanitizeItems(v.items || []), prefs: { holder: '', ...(v.prefs || {}) } };
+  const prefs = v.prefs && typeof v.prefs === 'object' ? v.prefs : {};
+  return { items: sanitizeItems(v.items || []), prefs: { holder: typeof prefs.holder === 'string' ? prefs.holder : '', filters: prefs.filters && typeof prefs.filters === 'object' ? prefs.filters : {} } };
 }
 
 export async function writeVault(dek, vault, ls = globalThis.localStorage) {

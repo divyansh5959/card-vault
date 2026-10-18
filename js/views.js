@@ -1,6 +1,6 @@
 // Card and gift-card lists, detail sheets and add/edit forms.
 
-import { h, toast, sheet, copyText, confirmSheet, today } from './ui.js';
+import { h, toast, sheet, copyText, confirmSheet, today, combo, chainFields, firstEmpty } from './ui.js';
 import { icon, networkMark, chip } from './icons.js';
 import {
   NETWORKS, TIERS, detectNetwork, luhnValid, maxLength, formatNumber, maskNumber, last4, digits,
@@ -10,6 +10,10 @@ import {
 import { BANKS, bankInfo, GIFT_BRANDS } from './data.js';
 import { newId } from './store.js';
 import { store } from './app.js';
+import {
+  facetsFor, applyFacets, facetCounts, activePills, removePill, clearFacets, toggleValue,
+  sortItems, CARD_SORTS, GIFT_SORTS,
+} from './filters.js';
 
 export const TAB_META = {
   credit: { title: 'Credit cards', short: 'Credit', icon: 'credit', add: 'Add credit card', placeholder: 'Search bank, card, last 4 digits…' },
@@ -18,9 +22,6 @@ export const TAB_META = {
   settings: { title: 'Settings', short: 'Settings', icon: 'settings' },
 };
 
-const GIFT_STATUS = [['live', 'Active'], ['soon', 'Expiring ≤30 days'], ['expired', 'Expired'], ['used', 'Used'], ['all', 'All']];
-const CARD_SORTS = { bank: 'Bank A–Z', recent: 'Recently added', expiry: 'Expiring first', limit: 'Highest limit' };
-const GIFT_SORTS = { expiry: 'Expiring first', amount: 'Highest amount', brand: 'Brand A–Z', recent: 'Recently added' };
 const REVEAL_MS = 30_000;
 
 const itemsOf = (S, kind) => S.vault.items.filter((x) => x.kind === kind);
@@ -57,90 +58,108 @@ export function crossTabHits(S, tab) {
 
 function filtered(S, tab) {
   const f = S.filters[tab];
-  const q = S.query[tab];
-  let list = itemsOf(S, tab).filter((x) => matchesQuery(x, q));
+  const searched = itemsOf(S, tab).filter((x) => matchesQuery(x, S.query[tab]));
+  return sortItems(applyFacets(searched, tab, f), tab, f);
+}
+
+const setFilters = (tab, next) => store.setFilters(tab, next);
+
+function fchip(label, on, onclick, count, extraCls = '') {
+  const dead = count === 0 && !on;
+  return h('button', {
+    class: `chip ${on ? 'on' : ''} ${dead ? 'dead' : ''} ${extraCls}`.trim(), type: 'button', 'aria-pressed': String(on), onclick,
+  }, label, count !== undefined ? h('span', { class: 'chip-n', text: String(count) }) : null);
+}
+
+// One-tap chips shown above the list: the most useful facet values for the tab.
+function quickChips(S, tab, items, counts) {
+  const f = S.filters[tab];
+  const flip = (key, value) => setFilters(tab, toggleValue(f, key, value));
+  const out = [];
   if (tab === 'gift') {
-    if (f.brand) list = list.filter((g) => g.brand === f.brand);
-    if (f.status !== 'all') {
-      list = list.filter((g) => {
-        const st = giftState(g);
-        if (f.status === 'live') return st === 'active' || st === 'soon';
-        return st === f.status;
-      });
+    for (const [v, l] of facetsFor('gift')[0].options(items)) {
+      out.push(fchip(l, f.status === v, () => setFilters(tab, { ...f, status: v }), counts.status[v], 'status'));
     }
-    const exp = (g) => { const d = dateDays(g.expiry); return d === null ? 1e9 : d; };
-    const sorts = {
-      expiry: (a, b) => exp(a) - exp(b) || a.brand.localeCompare(b.brand),
-      amount: (a, b) => (b.amount || 0) - (a.amount || 0),
-      brand: (a, b) => a.brand.localeCompare(b.brand) || exp(a) - exp(b),
-      recent: (a, b) => b.createdAt - a.createdAt,
-    };
-    // Used cards sort by when they were used, newest first.
-    if (f.status === 'used') return list.sort((a, b) => (b.usedAt || 0) - (a.usedAt || 0));
-    return list.sort(sorts[f.sort] || sorts.expiry);
+    return out;
   }
-  if (f.bank) list = list.filter((c) => c.bank === f.bank);
-  if (f.network) list = list.filter((c) => c.network === f.network);
-  const exp = (c) => { const d = cardExpiryDays(c.expiry); return d === null ? 1e9 : d; };
-  const sorts = {
-    bank: (a, b) => a.bank.localeCompare(b.bank) || a.name.localeCompare(b.name),
-    recent: (a, b) => b.createdAt - a.createdAt,
-    expiry: (a, b) => exp(a) - exp(b),
-    limit: (a, b) => (Number(b.limit) || 0) - (Number(a.limit) || 0),
-  };
-  return list.sort(sorts[f.sort] || sorts.bank);
-}
-
-function chipRow(label, options, value, onPick) {
-  return h('div', { class: 'chips', role: 'group', 'aria-label': label },
-    options.map(([v, l, n]) => h('button', {
-      class: `chip ${value === v ? 'on' : ''}`, type: 'button', 'aria-pressed': String(value === v),
-      onclick: () => onPick(value === v && v !== '' && v !== 'live' ? '' : v),
-    }, l, n !== undefined ? h('span', { class: 'chip-n', text: String(n) }) : null)));
-}
-
-function sortSelect(sorts, value, onPick) {
-  return h('label', { class: 'sort' }, h('span', { class: 'sr-only', text: 'Sort' }),
-    h('select', { class: 'select', 'aria-label': 'Sort', onchange: (e) => onPick(e.target.value) },
-      Object.entries(sorts).map(([v, l]) => h('option', { value: v, selected: v === value, text: l }))));
+  if (items.some((c) => c.fav)) out.push(fchip('★ Favourites', f.fav, () => flip('fav'), counts.fav.true));
+  const soon = counts.validity.soon;
+  if (soon || f.validity === 'soon') out.push(fchip('Expiring soon', f.validity === 'soon', () => flip('validity', 'soon'), soon));
+  for (const [v, l] of facetsFor(tab).find((x) => x.key === 'networks').options(items)) {
+    out.push(fchip(l, f.networks.includes(v), () => flip('networks', v), counts.networks[v]));
+  }
+  return out;
 }
 
 function renderTools(S, tab) {
   const f = S.filters[tab];
   const all = itemsOf(S, tab);
-  const set = (k) => (v) => { f[k] = v; store.refresh(); };
   if (!all.length) return [];
-  if (tab === 'gift') {
-    const counts = { live: 0, soon: 0, expired: 0, used: 0, all: all.length };
-    for (const g of all) {
-      const st = giftState(g);
-      if (st === 'active' || st === 'soon') counts.live++;
-      if (st !== 'active') counts[st]++;
-    }
-    const brands = [...new Set(all.map((g) => g.brand))].sort();
-    return [
-      chipRow('Status', GIFT_STATUS.map(([v, l]) => [v, l, counts[v]]), f.status, (v) => set('status')(v || 'live')),
-      h('div', { class: 'tools-row' },
-        brands.length > 1
-          ? h('select', { class: 'select', 'aria-label': 'Brand', onchange: (e) => set('brand')(e.target.value) },
-            h('option', { value: '', text: 'All brands' }),
-            brands.map((b) => h('option', { value: b, selected: b === f.brand, text: b })))
-          : h('span'),
-        f.status === 'used' ? h('span') : sortSelect(GIFT_SORTS, f.sort, set('sort'))),
-    ];
-  }
-  const banks = [...new Set(all.map((c) => c.bank))].sort();
-  const nets = [...new Set(all.map((c) => c.network))].filter((n) => n !== 'other');
-  const sorts = { ...CARD_SORTS };
+  const searched = all.filter((x) => matchesQuery(x, S.query[tab]));
+  const counts = facetCounts(searched, tab, f);
+  const pills = activePills(tab, f, all);
+  const shown = applyFacets(searched, tab, f).length;
+  const sorts = { ...(tab === 'gift' ? GIFT_SORTS : CARD_SORTS) };
   if (tab === 'debit') delete sorts.limit;
-  return [
-    banks.length > 1 ? chipRow('Bank', [['', 'All banks'], ...banks.map((b) => [b, b, all.filter((c) => c.bank === b).length])], f.bank, set('bank')) : null,
-    h('div', { class: 'tools-row' },
-      nets.length > 1
-        ? chipRow('Network', nets.map((n) => [n, NETWORKS[n].label]), f.network, set('network'))
-        : h('span'),
-      sortSelect(sorts, f.sort, set('sort'))),
+
+  const filterBtn = h('button', { class: `btn small ghost filter-btn ${pills.length ? 'active' : ''}`, type: 'button', onclick: () => openFilterSheet(S, tab) },
+    icon('filter'), 'Filters', pills.length ? h('span', { class: 'badge-n', text: String(pills.length) }) : null);
+  const sortSel = h('label', { class: 'sort' }, h('span', { class: 'sr-only', text: 'Sort' }),
+    h('select', { class: 'select', 'aria-label': 'Sort', disabled: tab === 'gift' && f.status === 'used', onchange: (e) => setFilters(tab, { ...f, sort: e.target.value }) },
+      Object.entries(sorts).map(([v, l]) => h('option', { value: v, selected: v === f.sort, text: l }))));
+
+  const rows = [
+    h('div', { class: 'tools-row' }, filterBtn, sortSel),
+    h('div', { class: 'chips quick', role: 'group', 'aria-label': 'Quick filters' }, quickChips(S, tab, all, counts)),
   ];
+  if (pills.length) {
+    rows.push(h('div', { class: 'pills' },
+      pills.map((p) => h('button', {
+        class: 'pill-x', type: 'button', 'aria-label': `Remove filter ${p.label}`,
+        onclick: () => setFilters(tab, removePill(tab, f, p)),
+      }, h('span', { text: p.label }), icon('close'))),
+      h('button', { class: 'link-btn small', type: 'button', text: 'Clear all', onclick: () => setFilters(tab, clearFacets(tab, f)) })));
+  }
+  if (pills.length || S.query[tab]) {
+    rows.push(h('p', { class: 'result-count', 'aria-live': 'polite', text: `Showing ${shown} of ${all.length}` }));
+  }
+  return rows;
+}
+
+function openFilterSheet(S, tab) {
+  const all = itemsOf(S, tab);
+  const searched = () => all.filter((x) => matchesQuery(x, S.query[tab]));
+  let draft = { ...S.filters[tab] };
+  const body = h('div', { class: 'filter-sheet' });
+  const showBtn = h('button', { class: 'btn primary', type: 'button' });
+  const clearBtn = h('button', { class: 'btn ghost', type: 'button', text: 'Clear all', onclick: () => { draft = clearFacets(tab, draft); paint(); } });
+
+  const paint = () => {
+    const items = searched();
+    const counts = facetCounts(items, tab, draft);
+    const groups = facetsFor(tab).map((fc) => {
+      if (fc.bool) {
+        return h('label', { class: 'f-switch' },
+          h('span', { class: 'f-switch-text' }, fc.label, h('span', { class: 'chip-n', text: String(counts[fc.key].true) })),
+          h('input', { type: 'checkbox', checked: !!draft[fc.key], onchange: () => { draft = toggleValue(draft, fc.key); paint(); } }));
+      }
+      const opts = fc.options(all);
+      if (!opts.length) return null;
+      return h('section', { class: 'f-group' },
+        h('h3', { class: 'f-head' }, fc.label, fc.multi ? h('span', { class: 'f-hint', text: 'any of' }) : null),
+        h('div', { class: 'chips wrap' }, opts.map(([v, l]) => {
+          const on = fc.multi ? draft[fc.key].includes(v) : draft[fc.key] === v;
+          return fchip(l, on, () => { draft = toggleValue(draft, fc.key, v); paint(); }, counts[fc.key][v]);
+        })));
+    });
+    const n = applyFacets(items, tab, draft).length;
+    showBtn.textContent = n === 1 ? 'Show 1 result' : `Show ${n} results`;
+    showBtn.disabled = n === 0;
+    body.replaceChildren(...groups.filter(Boolean), h('div', { class: 'row-end sticky-actions' }, clearBtn, showBtn));
+  };
+  const s = sheet({ title: `Filter ${TAB_META[tab].title.toLowerCase()}`, body, wide: true });
+  showBtn.addEventListener('click', () => { setFilters(tab, draft); s.close(); });
+  paint();
 }
 
 // ---------------- list rendering ----------------
@@ -159,8 +178,7 @@ export function renderTab(S, tab) {
           class: 'btn ghost', type: 'button', text: 'Clear search and filters',
           onclick: () => {
             S.query[tab] = '';
-            Object.assign(S.filters[tab], tab === 'gift' ? { status: 'live', brand: '' } : { bank: '', network: '' });
-            store.refresh();
+            setFilters(tab, clearFacets(tab, S.filters[tab]));
           },
         })),
     };
@@ -210,7 +228,7 @@ export function cardFace(c, revealed) {
       h('div', { class: 'cc-id' },
         h('span', { class: 'cc-bank', text: c.bank }),
         c.name || c.tier ? h('span', { class: 'cc-name', text: [c.name, c.tier].filter(Boolean).join(' · ') }) : null),
-      h('span', { class: 'cc-kind', text: c.kind === 'credit' ? 'CREDIT' : 'DEBIT' })),
+      h('span', { class: 'cc-kind' }, c.fav ? h('span', { class: 'cc-star', 'aria-label': 'Favourite', text: '★' }) : null, c.kind === 'credit' ? 'CREDIT' : 'DEBIT')),
     h('div', { class: 'cc-mid' }, chip(), icon('wifi', 'cc-nfc')),
     h('div', { class: `cc-number ${revealed ? 'on' : ''}`, text: numberText }),
     h('div', { class: 'cc-bottom' },
@@ -218,7 +236,8 @@ export function cardFace(c, revealed) {
         h('span', { class: 'cc-val holder', text: c.holder || '—' })),
       h('div', { class: 'cc-field' }, h('span', { class: 'cc-label', text: 'Valid thru' }), h('span', { class: 'cc-val', text: c.expiry || '—' })),
       h('div', { class: 'cc-field' }, h('span', { class: 'cc-label', text: 'CVV' }), h('span', { class: 'cc-val', text: c.cvv ? (revealed ? c.cvv : '•'.repeat(c.cvv.length)) : '—' })),
-      netMark ? h('div', { class: 'cc-net' }, netMark) : h('div', { class: 'cc-net text', text: NETWORKS[c.network]?.label || '' })),
+      h('div', { class: 'cc-net' }, netMark || h('span', { class: 'cc-net-text', text: NETWORKS[c.network]?.label || '' }),
+        c.tier ? h('span', { class: 'cc-tier', text: c.tier }) : null)),
     expiryBadge(expDays, ''));
 }
 
@@ -237,6 +256,14 @@ function cardTile(S, c) {
         onclick: () => { if (revealed) S.revealed.delete(c.id); else reveal(S, c.id); store.refresh(); },
       }, icon(revealed ? 'eyeOff' : 'eye'))));
   return tile;
+}
+
+function favButton(item, cls = 'act icon-only') {
+  return h('button', {
+    class: `${cls} fav ${item.fav ? 'on' : ''}`, type: 'button', 'aria-pressed': String(!!item.fav),
+    'aria-label': item.fav ? 'Remove from favourites' : 'Add to favourites',
+    onclick: async () => { await store.upsert({ ...item, fav: !item.fav }); store.refresh(); },
+  }, icon('star'));
 }
 
 function cardRow(S, c) {
@@ -278,7 +305,9 @@ function giftTile(S, g) {
   const state = giftState(g);
   return h('article', { class: `gift ${state} u-${g.used ? 'used' : urgency(giftDays(g))}` },
     h('div', { class: 'gift-top' }, giftPill(g),
-      h('button', { class: 'icon-btn small', type: 'button', 'aria-label': 'Gift card details', onclick: () => openGift(S, g) }, icon('more'))),
+      h('div', { class: 'gift-top-actions' },
+        favButton(g, 'icon-btn small'),
+        h('button', { class: 'icon-btn small', type: 'button', 'aria-label': 'Gift card details', onclick: () => openGift(S, g) }, icon('more')))),
     h('button', { class: 'gift-body', type: 'button', onclick: () => openGift(S, g), 'aria-label': `Open ${g.brand} gift card` },
       brandAvatar(g.brand),
       h('span', { class: 'gift-text' },
@@ -371,8 +400,15 @@ function openCard(S, c) {
         infoRow('Network', `${NETWORKS[c.network]?.label || 'Unknown'}${c.tier ? ' ' + c.tier : ''}`),
         days !== null ? infoRow('Validity', expiryPhrase(days)) : null,
         infoRow('Notes', c.notes)),
+      !c.tier && (TIERS[c.network] || []).length ? h('div', { class: 'variant-ask' },
+        h('p', { class: 'muted small', text: `Which ${NETWORKS[c.network].label} variant is this card? It is printed on the card, usually near the logo.` }),
+        h('div', { class: 'chips small wrap' }, TIERS[c.network].map((t) => h('button', {
+          class: 'chip', type: 'button', text: t,
+          onclick: async () => { await store.upsert({ ...c, tier: t }); s.close(); store.refresh(); toast(`Variant set to ${t}`); },
+        })))) : null,
       h('div', { class: 'd-actions' },
         h('button', { class: 'btn primary', type: 'button', onclick: () => copyText(cardText(c), 'All details') }, icon('copyAll'), 'Copy all'),
+        h('button', { class: `btn ghost fav ${c.fav ? 'on' : ''}`, type: 'button', 'aria-pressed': String(!!c.fav), onclick: async () => { await store.upsert({ ...c, fav: !c.fav }); s.close(); store.refresh(); toast(c.fav ? 'Removed from favourites' : 'Added to favourites'); } }, icon('star'), 'Favourite'),
         h('button', { class: 'btn ghost', type: 'button', onclick: () => shareText(`${c.bank} ${c.name}`, cardText(c)) }, icon('share'), 'Share'),
         h('button', { class: 'btn ghost', type: 'button', onclick: () => { s.close(); openEditor(c.kind, c); } }, icon('edit'), 'Edit'),
         h('button', { class: 'btn ghost danger-text', type: 'button', onclick: () => { s.close(); deleteItem(c, 'Card')(); } }, icon('trash'), 'Delete'))),
@@ -394,6 +430,7 @@ function openGift(S, g) {
         infoRow('Notes', g.notes)),
       h('div', { class: 'd-actions' },
         h('button', { class: 'btn primary', type: 'button', onclick: () => copyText(giftText(g), 'Gift card details') }, icon('copyAll'), 'Copy all'),
+        h('button', { class: `btn ghost fav ${g.fav ? 'on' : ''}`, type: 'button', 'aria-pressed': String(!!g.fav), onclick: async () => { await store.upsert({ ...g, fav: !g.fav }); s.close(); store.refresh(); toast(g.fav ? 'Removed from favourites' : 'Added to favourites'); } }, icon('star'), 'Favourite'),
         h('button', { class: 'btn ghost', type: 'button', onclick: () => { s.close(); toggleUsed(g); } }, icon(g.used ? 'undo' : 'check'), g.used ? 'Not used' : 'Mark used'),
         h('button', { class: 'btn ghost', type: 'button', onclick: () => shareText(`${g.brand} gift card`, giftText(g)) }, icon('share'), 'Share'),
         h('button', { class: 'btn ghost', type: 'button', onclick: () => { s.close(); openEditor('gift', g); } }, icon('edit'), 'Edit'),
@@ -412,8 +449,34 @@ function field(label, input, hint, err) {
   return h('label', { class: 'field' }, h('span', { class: 'field-label', text: label }), input, hint || null, err || null);
 }
 
-function datalist(id, values) {
-  return h('datalist', { id }, values.map((v) => h('option', { value: v })));
+function fieldDiv(label, control, hint) {
+  const input = control.querySelector('input');
+  const lab = h('label', { class: 'field-label', for: input.id || (input.id = `f-${Math.random().toString(36).slice(2)}`), text: label });
+  return h('div', { class: 'field' }, lab, control, hint || null);
+}
+
+// Card names offered for a bank: credit products in the Credit tab, debit ones in Debit.
+function cardNamesFor(bank, kind) {
+  const info = bankInfo(bank);
+  const debit = info.cards.filter((n) => /debit/i.test(n));
+  const credit = info.cards.filter((n) => !/debit/i.test(n));
+  return kind === 'debit' ? (debit.length ? debit : info.cards) : (credit.length ? credit : info.cards);
+}
+
+// A card already saved from the same number range (same first 6+ digits):
+// its bank, name and variant are almost certainly the same.
+function sameRangeCard(items, number, selfId) {
+  const n = digits(number);
+  if (n.length < 6) return null;
+  let best = null;
+  let bestLen = 5;
+  for (const it of items) {
+    if (it.kind === 'gift' || it.id === selfId) continue;
+    let k = 0;
+    while (k < 8 && k < n.length && it.number[k] === n[k]) k++;
+    if (k > bestLen) { best = it; bestLen = k; }
+  }
+  return best;
 }
 
 function cardForm(kind, existing) {
@@ -423,22 +486,31 @@ function cardForm(kind, existing) {
     number: '', expiry: '', cvv: '', limit: '', limitGroup: '', notes: '', createdAt: Date.now(),
   };
   let netOverride = existing ? existing.network : '';
-  const listId = `dl-${Math.random().toString(36).slice(2)}`;
 
-  const numberIn = h('input', { class: 'field-input mono', inputmode: 'numeric', autocomplete: 'off', placeholder: '1234 5678 9012 3456', 'aria-label': 'Card number', value: formatNumber(c.number, c.network) });
+  const numberIn = h('input', { class: 'field-input mono', type: 'text', inputmode: 'numeric', autocomplete: 'off', placeholder: '1234 5678 9012 3456', 'aria-label': 'Card number', value: formatNumber(c.number, c.network) });
   const numberHint = h('span', { class: 'field-hint' });
-  const bankIn = h('input', { class: 'field-input', list: `${listId}-banks`, autocomplete: 'off', placeholder: 'Start typing, e.g. HDFC', value: c.bank });
-  const nameIn = h('input', { class: 'field-input', list: `${listId}-cards`, autocomplete: 'off', placeholder: 'e.g. Regalia Gold', value: c.name });
-  const cardsList = datalist(`${listId}-cards`, []);
+  const bankCombo = combo({
+    getOptions: () => BANKS.map((b) => b.name), placeholder: 'Start typing, e.g. HDFC', value: c.bank,
+    attrs: { autocapitalize: 'words', 'aria-label': 'Bank' },
+    onPick: () => (firstEmpty([nameCombo.input]) || holderIn).focus(),
+  });
+  const bankIn = bankCombo.input;
+  const nameCombo = combo({
+    getOptions: () => cardNamesFor(bankIn.value, kind), placeholder: 'e.g. Regalia Gold', value: c.name,
+    attrs: { autocapitalize: 'words', 'aria-label': 'Card name' },
+  });
+  const nameIn = nameCombo.input;
+  const rangeHint = h('span', { class: 'field-hint ok' });
   const netSel = h('select', { class: 'select', 'aria-label': 'Network' },
     h('option', { value: '', text: 'Detect from number' }),
     Object.values(NETWORKS).filter((n) => n.id !== 'other').map((n) => h('option', { value: n.id, text: n.label, selected: n.id === netOverride })));
-  const tierIn = h('input', { class: 'field-input', autocomplete: 'off', placeholder: 'e.g. Signature', value: c.tier });
-  const tierChips = h('div', { class: 'chips small' });
-  const holderIn = h('input', { class: 'field-input caps', autocomplete: 'off', autocapitalize: 'characters', placeholder: 'As printed on the card', value: c.holder });
-  const expIn = h('input', { class: 'field-input mono', inputmode: 'numeric', autocomplete: 'off', placeholder: 'MM/YY', maxlength: 5, value: c.expiry });
-  const cvvIn = h('input', { class: 'field-input mono', inputmode: 'numeric', autocomplete: 'off', placeholder: '123', maxlength: 4, value: c.cvv });
-  const limitIn = h('input', { class: 'field-input mono', inputmode: 'numeric', autocomplete: 'off', placeholder: 'e.g. 3,00,000', value: groupIndian(c.limit) });
+  const tierIn = h('input', { class: 'field-input', type: 'text', autocomplete: 'off', autocapitalize: 'words', placeholder: 'Tap one below or type it', value: c.tier, 'aria-label': 'Variant' });
+  const tierChips = h('div', { class: 'chips small wrap', role: 'group', 'aria-label': 'Variant suggestions' });
+  const tierHint = h('span', { class: 'field-hint' });
+  const holderIn = h('input', { class: 'field-input caps', type: 'text', autocomplete: 'off', autocorrect: 'off', spellcheck: 'false', autocapitalize: 'characters', placeholder: 'As printed on the card', value: c.holder, 'aria-label': 'Name on card' });
+  const expIn = h('input', { class: 'field-input mono', type: 'text', inputmode: 'numeric', autocomplete: 'off', placeholder: 'MM/YY', maxlength: 5, value: c.expiry, 'aria-label': 'Expiry' });
+  const cvvIn = h('input', { class: 'field-input mono', type: 'text', inputmode: 'numeric', autocomplete: 'off', placeholder: '123', maxlength: 4, value: c.cvv, 'aria-label': 'CVV' });
+  const limitIn = h('input', { class: 'field-input mono', type: 'text', inputmode: 'numeric', autocomplete: 'off', placeholder: 'e.g. 3,00,000', value: groupIndian(c.limit), 'aria-label': 'Credit limit' });
   const shareBox = h('div', { class: 'share-box' });
   const notesIn = h('textarea', { class: 'field-input', rows: 2, placeholder: 'Optional: billing date, reward notes…' });
   notesIn.value = c.notes || '';
@@ -455,10 +527,20 @@ function cardForm(kind, existing) {
     })));
   };
 
-  const paintCardNames = () => {
-    const info = bankInfo(bankIn.value);
-    const names = info.cards.filter((n) => (kind === 'debit' ? /debit/i.test(n) || info.cards.every((x) => !/debit/i.test(x)) : !/debit/i.test(n)));
-    cardsList.replaceChildren(...(names.length ? names : info.cards).map((v) => h('option', { value: v })));
+  // Fill bank, name and variant from a saved card in the same number range.
+  let rangeFilledFrom = '';
+  const applyRange = () => {
+    const mate = sameRangeCard(S.vault.items, numberIn.value, c.id);
+    if (!mate || rangeFilledFrom === mate.id) return;
+    const filled = [];
+    if (!bankIn.value.trim() && mate.bank) { bankIn.value = mate.bank; filled.push('bank'); }
+    if (!nameIn.value.trim() && mate.name && mate.kind === kind) { nameIn.value = mate.name; filled.push('card name'); }
+    if (!tierIn.value.trim() && mate.tier) { tierIn.value = mate.tier; filled.push('variant'); }
+    rangeFilledFrom = mate.id;
+    rangeHint.textContent = filled.length
+      ? `Filled ${filled.join(', ')} from your ${mate.bank}${mate.name ? ' ' + mate.name : ''} (same card range).`
+      : '';
+    if (filled.length) paintShare();
   };
 
   const paintShare = () => {
@@ -488,6 +570,9 @@ function cardForm(kind, existing) {
     numberHint.classList.toggle('warn', lens.includes(clipped.length) && !luhnValid(clipped));
     cvvIn.maxLength = NETWORKS[id]?.cvv || 3;
     paintTiers();
+    tierHint.textContent = (TIERS[id] || []).length
+      ? `${NETWORKS[id].label} variant. It isn't encoded in the number; pick it once and cards from the same range fill it in.`
+      : 'Optional, e.g. Platinum.';
     const draft = { ...c, bank: bankIn.value.trim() || 'Your bank', name: nameIn.value.trim(), tier: tierIn.value.trim(), network: id, holder: holderIn.value.trim().toUpperCase(), number: clipped, expiry: expIn.value, cvv: cvvIn.value };
     preview.replaceChildren(cardFace(draft, true));
   };
@@ -495,6 +580,7 @@ function cardForm(kind, existing) {
   let lastLen = digits(numberIn.value).length;
   numberIn.addEventListener('input', () => {
     update();
+    applyRange();
     const n = digits(numberIn.value);
     const grew = n.length > lastLen;
     lastLen = n.length;
@@ -503,11 +589,10 @@ function cardForm(kind, existing) {
     if (grew && n.length >= 14 && net() !== 'other' && lens.includes(n.length) && luhnValid(n)) expIn.focus();
   });
   netSel.addEventListener('change', () => { netOverride = netSel.value; update(); });
-  bankIn.addEventListener('input', () => { paintCardNames(); paintShare(); update(); });
-  bankIn.addEventListener('change', () => {
+  bankIn.addEventListener('input', () => { paintShare(); update(); });
+  bankIn.addEventListener('blur', () => {
     const hit = BANKS.find((b) => b.name.toLowerCase() === bankIn.value.trim().toLowerCase());
-    if (hit) bankIn.value = hit.name;
-    paintCardNames(); paintShare(); update();
+    if (hit && hit.name !== bankIn.value) { bankIn.value = hit.name; paintShare(); update(); }
   });
   [nameIn, tierIn, holderIn].forEach((el) => el.addEventListener('input', update));
   expIn.addEventListener('input', (e) => {
@@ -519,7 +604,8 @@ function cardForm(kind, existing) {
   cvvIn.addEventListener('input', () => {
     cvvIn.value = digits(cvvIn.value).slice(0, cvvIn.maxLength);
     update();
-    if (cvvIn.value.length === cvvIn.maxLength) (kind === 'credit' ? limitIn : holderIn).focus();
+    // Next comes the first field still empty, in the order of the form.
+    if (cvvIn.value.length === cvvIn.maxLength) (firstEmpty([bankIn, nameIn, holderIn]) || (kind === 'credit' ? limitIn : notesIn)).focus();
   });
   limitIn.addEventListener('input', () => { limitIn.value = groupIndian(limitIn.value); });
 
@@ -530,13 +616,12 @@ function cardForm(kind, existing) {
     h('div', { class: 'grid2' },
       field('Expiry', expIn),
       field(`CVV${(NETWORKS[net()]?.cvv || 3) === 4 ? ' (4 digits)' : ''}`, cvvIn)),
-    field('Bank', bankIn),
-    datalist(`${listId}-banks`, BANKS.map((b) => b.name)),
-    field('Card name', nameIn, h('span', { class: 'field-hint', text: 'Suggestions appear for the bank you pick.' })),
-    cardsList,
-    h('div', { class: 'grid2' }, field('Network', netSel), field('Variant', tierIn)),
+    fieldDiv('Bank', bankCombo.wrap, rangeHint),
+    fieldDiv('Card name', nameCombo.wrap),
+    field('Variant', tierIn, tierHint),
     tierChips,
     field('Name on card', holderIn),
+    field('Network', netSel, h('span', { class: 'field-hint', text: 'Detected from the number. Change it only if detection is wrong.' })),
     kind === 'credit' ? field('Credit limit (₹, optional)', limitIn) : null,
     kind === 'credit' ? shareBox : null,
     field('Notes', notesIn),
@@ -544,7 +629,8 @@ function cardForm(kind, existing) {
     h('div', { class: 'row-end sticky-actions' }, save));
 
   const s = sheet({ title: existing ? 'Edit card' : TAB_META[kind].add, body: form, wide: true });
-  paintCardNames(); paintShare(); update();
+  chainFields([numberIn, expIn, cvvIn, bankIn, nameIn, tierIn, holderIn, kind === 'credit' ? limitIn : null]);
+  paintShare(); update();
   if (!existing) numberIn.focus();
 
   form.addEventListener('submit', async (e) => {
@@ -611,11 +697,15 @@ function dedupe(list) {
 function giftForm(existing) {
   const S = store.state;
   const g = existing ? { ...existing } : { id: newId(), kind: 'gift', brand: '', amount: 0, code: '', pin: '', expiry: '', used: false, usedAt: 0, notes: '', createdAt: Date.now() };
-  const listId = `dl-${Math.random().toString(36).slice(2)}`;
-  const brandIn = h('input', { class: 'field-input', list: `${listId}-brands`, autocomplete: 'off', placeholder: 'e.g. Amazon, Myntra, Swiggy', value: g.brand });
-  const amountIn = h('input', { class: 'field-input mono', inputmode: 'numeric', autocomplete: 'off', placeholder: 'e.g. 1,000', value: g.amount ? groupIndian(g.amount) : '' });
-  const codeIn = h('input', { class: 'field-input mono', autocomplete: 'off', autocapitalize: 'characters', spellcheck: 'false', placeholder: 'Voucher / claim code', value: g.code });
-  const pinIn = h('input', { class: 'field-input mono', autocomplete: 'off', spellcheck: 'false', placeholder: 'Only if the voucher has one', value: g.pin });
+  const brandCombo = combo({
+    getOptions: () => [...new Set([...S.vault.items.filter((x) => x.kind === 'gift').map((x) => x.brand), ...GIFT_BRANDS])],
+    placeholder: 'e.g. Amazon, Myntra, Swiggy', value: g.brand, attrs: { autocapitalize: 'words', 'aria-label': 'Company' },
+    onPick: () => amountIn.focus(),
+  });
+  const brandIn = brandCombo.input;
+  const amountIn = h('input', { class: 'field-input mono', type: 'text', inputmode: 'numeric', autocomplete: 'off', placeholder: 'e.g. 1,000', value: g.amount ? groupIndian(g.amount) : '', 'aria-label': 'Amount' });
+  const codeIn = h('input', { class: 'field-input mono', type: 'text', autocomplete: 'off', autocorrect: 'off', autocapitalize: 'characters', spellcheck: 'false', placeholder: 'Voucher / claim code', value: g.code, 'aria-label': 'Voucher code' });
+  const pinIn = h('input', { class: 'field-input mono', type: 'text', autocomplete: 'off', autocorrect: 'off', autocapitalize: 'off', spellcheck: 'false', placeholder: 'Only if the voucher has one', value: g.pin, 'aria-label': 'Voucher PIN' });
   const expIn = h('input', { class: 'field-input', type: 'date', value: g.expiry, min: existing ? null : today() });
   const noExp = h('input', { type: 'checkbox', checked: !!existing && !g.expiry });
   const expHint = h('span', { class: 'field-hint' });
@@ -629,7 +719,7 @@ function giftForm(existing) {
       onclick: () => { const d = new Date(); d.setMonth(d.getMonth() + m); expIn.value = today(d); noExp.checked = false; paint(); },
     })));
   const amountChips = h('div', { class: 'chips small' },
-    [250, 500, 1000, 2000, 5000].map((a) => h('button', { class: 'chip', type: 'button', text: formatINR(a), onclick: () => { amountIn.value = groupIndian(a); } })));
+    [250, 500, 1000, 2000, 5000].map((a) => h('button', { class: 'chip', type: 'button', text: formatINR(a), onclick: () => { amountIn.value = groupIndian(a); if (!codeIn.value) codeIn.focus(); } })));
 
   const paint = () => {
     expIn.disabled = noExp.checked;
@@ -644,8 +734,7 @@ function giftForm(existing) {
 
   const save = h('button', { class: 'btn primary', type: 'submit', text: existing ? 'Save changes' : 'Save gift card' });
   const form = h('form', { class: 'form', novalidate: true },
-    field('Company', brandIn),
-    datalist(`${listId}-brands`, [...new Set([...S.vault.items.filter((x) => x.kind === 'gift').map((x) => x.brand), ...GIFT_BRANDS])]),
+    fieldDiv('Company', brandCombo.wrap),
     field('Amount (₹)', amountIn),
     amountChips,
     field('Voucher code', codeIn),
@@ -657,6 +746,7 @@ function giftForm(existing) {
     h('div', { class: 'row-end sticky-actions' }, save));
 
   const s = sheet({ title: existing ? 'Edit gift card' : 'Add gift card', body: form, wide: true });
+  chainFields([brandIn, amountIn, codeIn, pinIn]);
   paint();
   if (!existing) brandIn.focus();
 

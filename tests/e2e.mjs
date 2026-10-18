@@ -69,13 +69,20 @@ try {
   assert.equal(await num.inputValue(), '4111 1111 1111 1111');
   await page.getByText('Visa · number looks valid').waitFor();
   const focused = await page.evaluate(() => document.activeElement.placeholder);
-  if (focused !== 'MM/YY') console.log('  dbg', await page.evaluate(() => JSON.stringify({ dialogs: [...document.querySelectorAll('dialog')].map((d) => d.getAttribute('aria-label') + ':' + d.open), hint: document.querySelector('.field-hint')?.textContent, ae: document.activeElement.outerHTML.slice(0, 120) })));
   assert.equal(focused, 'MM/YY', 'auto-advance to expiry');
   await page.keyboard.type('0829');
   assert.equal(await page.evaluate(() => document.activeElement.placeholder), '123', 'auto-advance to CVV');
   await page.keyboard.type('123');
-  await page.getByPlaceholder('Start typing, e.g. HDFC').fill('HDFC Bank');
-  await page.getByPlaceholder('e.g. Regalia Gold').fill('Regalia Gold');
+  assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-label')), 'Bank', 'after CVV the cursor moves to Bank');
+  assert.equal(await page.evaluate(() => [...document.querySelectorAll('dialog[open] input')].filter((i) => i.list || i.getAttribute('list')).length), 0, 'no native datalist dropdowns');
+  await page.keyboard.type('hdf');
+  await page.locator('.combo-opt', { hasText: 'HDFC Bank' }).waitFor();
+  await page.locator('.combo-opt', { hasText: 'HDFC Bank' }).click();
+  assert.equal(await page.getByLabel('Bank', { exact: true }).inputValue(), 'HDFC Bank');
+  assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-label')), 'Card name', 'picking a bank moves on to card name');
+  await page.keyboard.type('reg');
+  await page.locator('.combo-opt', { hasText: 'Regalia Gold' }).click();
+  assert.equal(await page.getByLabel('Card name').inputValue(), 'Regalia Gold');
   await page.locator('.form .chips .chip', { hasText: 'Signature' }).click();
   await page.getByPlaceholder('As printed on the card').fill('divyansh bansal');
   await page.getByPlaceholder('e.g. 3,00,000').fill('300000');
@@ -83,7 +90,7 @@ try {
   await shot(page, '03-add-card-form');
   await page.getByRole('button', { name: 'Save card' }).click();
   await page.locator('.tile').first().waitFor();
-  log('Visa card saved with auto-format, auto-advance, tier and Indian limit grouping');
+  log('Visa card saved: auto-format, CVV → Bank, suggestion lists, variant chip, Indian limit grouping');
 
   // Amex, second HDFC card sharing the limit, RuPay with a bad checksum warning
   await settle(page); await page.locator('#fab').click();
@@ -103,8 +110,8 @@ try {
   await page.keyboard.type('0130');
   await page.keyboard.type('456');
   await page.getByPlaceholder('Start typing, e.g. HDFC').fill('HDFC Bank');
-  await page.getByPlaceholder('Start typing, e.g. HDFC').dispatchEvent('change');
   await page.getByPlaceholder('e.g. Regalia Gold').fill('Millennia');
+  await page.locator('.form .chips .chip', { hasText: /^World$/ }).click();
   await page.getByText('Shares this limit with:').waitFor();
   await page.locator('.share-box input[type=checkbox]').check();
   await page.getByRole('button', { name: 'Save card' }).click();
@@ -113,6 +120,18 @@ try {
   assert.match(sub, /3 cards · Total limit ₹3,50,000|3 cards · Total limit ₹3,00,000/);
   assert.ok(sub.includes('₹3,00,000'), `shared limit counted once: ${sub}`);
   log(`shared limit counted once: "${sub}"`);
+  assert.equal(await page.locator('.tile', { hasText: 'Millennia' }).locator('.cc-tier').textContent(), 'World');
+
+  // Same card range: bank, name and variant fill in from the saved Millennia.
+  await settle(page); await page.locator('#fab').click();
+  await page.getByLabel('Card number').pressSequentially('5500007777778886');
+  await page.getByText(/Filled bank, card name, variant from your HDFC Bank Millennia/).waitFor();
+  assert.equal(await page.getByLabel('Bank', { exact: true }).inputValue(), 'HDFC Bank');
+  assert.equal(await page.getByLabel('Variant', { exact: true }).inputValue(), 'World');
+  await shot(page, '03b-same-range');
+  await page.keyboard.press('Escape');
+  await settle(page);
+  log('same card range fills bank, card name and variant (World) automatically');
 
   // duplicate detection
   await settle(page); await page.locator('#fab').click();
@@ -148,14 +167,58 @@ try {
   assert.equal(await page.locator('.tile').count(), 1);
   await page.locator('#search').fill('1111');
   assert.equal(await page.locator('.tile').count(), 1);
+  await page.locator('#search').fill('world');
+  assert.equal(await page.locator('.tile').count(), 1, 'search matches the variant');
   await page.locator('#search').fill('');
-  await page.locator('.chips[aria-label=Bank] .chip', { hasText: 'HDFC Bank' }).click();
+  // quick network chip
+  await page.locator('.chips.quick .chip', { hasText: 'Visa' }).click();
+  assert.equal(await page.locator('.tile').count(), 1);
+  await page.locator('.chips.quick .chip', { hasText: 'Mastercard' }).click();
+  assert.equal(await page.locator('.tile').count(), 2, 'networks OR together');
+  await page.getByText('Showing 2 of 3').waitFor();
+  // full filter sheet with counts
+  await page.getByRole('button', { name: /^Filters/ }).click();
+  const sheetEl = page.locator('dialog[open] .filter-sheet');
+  await sheetEl.waitFor();
+  await sheetEl.locator('.chip', { hasText: 'HDFC Bank' }).click();
+  await sheetEl.locator('.chip', { hasText: /^World/ }).click();
+  await sheetEl.getByRole('button', { name: 'Show 1 result' }).waitFor();
+  await shot(page, '04b-filter-sheet');
+  await sheetEl.getByRole('button', { name: 'Show 1 result' }).click();
+  await settle(page);
+  assert.equal(await page.locator('.tile').count(), 1);
+  const activeF = await page.locator('.pill-x').allTextContents();
+  assert.deepEqual(activeF, ['HDFC Bank', 'Visa', 'Mastercard', 'World']);
+  await page.getByRole('button', { name: 'Remove filter World' }).click();
   assert.equal(await page.locator('.tile').count(), 2);
-  await page.locator('.chips[aria-label=Bank] .chip', { hasText: 'All banks' }).click();
+  await shot(page, '04c-filter-pills');
+  await page.getByRole('button', { name: 'Clear all' }).click();
+  assert.equal(await page.locator('.tile').count(), 3);
+  // variant not set → ask in detail sheet
+  await page.getByRole('button', { name: /^Filters/ }).click();
+  await page.locator('dialog[open] .filter-sheet .chip', { hasText: 'Not set' }).click();
+  await page.locator('dialog[open]').getByRole('button', { name: /^Show 1 result/ }).click();
+  await settle(page);
+  await page.locator('.tile .tile-face').first().click();
+  await page.locator('.variant-ask').waitFor();
+  await page.locator('.variant-ask .chip', { hasText: /^Platinum$/ }).click();
+  await settle(page);
+  assert.equal(await page.locator('.tile').count(), 0, 'card left the "variant not set" filter');
+  await page.getByRole('button', { name: 'Clear search and filters' }).click();
+  assert.equal(await page.locator('.tile').count(), 3);
+  // favourites
+  await page.locator('.tile', { hasText: 'Millennia' }).locator('.tile-face').click();
+  await page.locator('dialog[open]').getByRole('button', { name: 'Favourite' }).click();
+  await settle(page);
+  assert.equal(await page.locator('.tile .cc-bank').first().textContent(), 'HDFC Bank', 'favourites sort first');
+  assert.ok(await page.locator('.tile').first().locator('.cc-star').count());
+  await page.locator('.chips.quick .chip', { hasText: 'Favourites' }).click();
+  assert.equal(await page.locator('.tile').count(), 1);
+  await page.locator('.chips.quick .chip', { hasText: 'Favourites' }).click();
   await page.locator('select[aria-label=Sort]').selectOption('expiry');
   const firstBank = await page.locator('.tile .cc-bank').first().textContent();
   assert.equal(firstBank, 'American Express', 'expiry sort puts 11/27 Amex before 01/30 and 08/29? (11/27 earliest)');
-  log('search by name, last 4; bank filter; expiry sort');
+  log('filters: quick network chips (OR), sheet with counts, removable pills, "variant not set" + set from detail, favourites, expiry sort');
 
   // ---------- debit tab ----------
   step = 'debit';
@@ -168,6 +231,11 @@ try {
   await page.keyboard.press('Tab');
   await page.getByPlaceholder('MM/YY').fill('');
   await page.getByPlaceholder('MM/YY').pressSequentially('1126');
+  assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-label')), 'CVV');
+  await page.keyboard.type('321');
+  assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-label')), 'Bank', 'debit: after CVV the cursor moves to Bank');
+  await page.keyboard.press('Enter');
+  assert.equal(await page.evaluate(() => document.activeElement.getAttribute('aria-label')), 'Card name', 'keyboard Next moves to the next field');
   await page.getByPlaceholder('Start typing, e.g. HDFC').fill('State Bank of India (SBI)');
   await page.getByPlaceholder('e.g. Regalia Gold').fill('Platinum Debit');
   assert.equal(await page.getByPlaceholder('e.g. 3,00,000').count(), 0, 'no credit limit on debit');
@@ -214,11 +282,11 @@ try {
   assert.equal(await clip(page), '772211');
   await page.locator('.gift', { hasText: 'Swiggy' }).getByRole('button', { name: 'Mark used' }).click();
   assert.equal(await page.locator('.gift').count(), 3, 'used card leaves the Active filter');
-  await page.locator('.chips[aria-label=Status] .chip', { hasText: 'Used' }).click();
+  await page.locator('.chips.quick .chip', { hasText: 'Used' }).click();
   assert.equal(await page.locator('.gift').count(), 1);
-  await page.locator('.chips[aria-label=Status] .chip', { hasText: 'Expiring' }).click();
+  await page.locator('.chips.quick .chip', { hasText: 'Expiring' }).click();
   assert.equal(await page.locator('.gift').count(), 1, 'only Amazon (4 days) is expiring and unused');
-  await page.locator('.chips[aria-label=Status] .chip', { hasText: 'Active' }).click();
+  await page.locator('.chips.quick .chip', { hasText: 'Active' }).click();
   await page.locator('#search').fill('myn');
   assert.equal(await page.locator('.gift').count(), 1);
   await page.locator('#search').fill('hdfc');
@@ -411,7 +479,7 @@ try {
   assert.equal(await lap.page.locator('.tile').count(), 3);
   await noOverflow(lap.page, 'desktop credit'); await shot(lap.page, '13-desktop-credit');
   await lap.page.locator('.rail-btn[data-tab=gift]').click();
-  await lap.page.locator('.chips[aria-label=Status] .chip', { hasText: 'All' }).click();
+  await lap.page.locator('.chips.quick .chip', { hasText: 'All' }).click();
   assert.equal(await lap.page.locator('.gift').count(), 4);
   await shot(lap.page, '14-desktop-gift');
   log('laptop: restored encrypted backup, all 3 credit + 4 gift cards present');
