@@ -1,6 +1,6 @@
 // Offline cache for the app shell. Card data never passes through here:
 // it lives in localStorage and the app makes no network requests for it.
-const VERSION = 'cv-1.1.0';
+const VERSION = 'cv-1.1.1';
 const SHELL = [
   './', './index.html', './privacy.html', './manifest.webmanifest', './css/app.css', './css/privacy.css',
   './js/app.js', './js/views.js', './js/ui.js', './js/pinpad.js', './js/icons.js',
@@ -9,7 +9,9 @@ const SHELL = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL)));
+  // cache: 'reload' skips the browser's HTTP cache. Without it a new version
+  // could be stored with old files (GitHub Pages lets them be cached 10 min).
+  e.waitUntil(caches.open(VERSION).then((c) => c.addAll(SHELL.map((u) => new Request(u, { cache: 'reload' })))));
 });
 
 self.addEventListener('activate', (e) => {

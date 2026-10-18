@@ -14,7 +14,7 @@ import { WORDS } from './data.js';
 import { renderTab, openEditor, tabSummary, crossTabHits, TAB_META } from './views.js';
 import { defaultFilters, normalizeFilters } from './filters.js';
 
-export const VERSION = '1.1.0';
+export const VERSION = '1.1.1';
 const AUTO_LOCK_OPTIONS = [[0, 'Immediately'], [1, 'After 1 minute'], [5, 'After 5 minutes'], [15, 'After 15 minutes']];
 const IDLE_LOCK_MS = 10 * 60 * 1000;
 const MAX_FREE_TRIES = 5;
@@ -307,18 +307,64 @@ function showLock() {
   clear(appEl(), pad.el);
   tick();
 
+  let inFlight = false;
   async function tryFingerprint() {
+    if (inFlight || !pad.el.isConnected || lockoutRemaining() > 0) return;
+    inFlight = true;
+    pad.setMessage('');
     try {
       const dek = await unlockWithPrf(S.meta.prf);
       await unlocked(dek);
     } catch (e) {
-      if (pad.el.isConnected) pad.setMessage(e?.name === 'NotAllowedError' ? 'Fingerprint cancelled. Enter your PIN.' : 'Fingerprint did not work. Enter your PIN.');
+      if (pad.el.isConnected) pad.setMessage(e?.name === 'NotAllowedError' ? 'Fingerprint cancelled. Tap the fingerprint key or enter your PIN.' : 'Fingerprint did not work. Enter your PIN.');
+    } finally {
+      inFlight = false;
     }
   }
-  if (S.meta.prf && document.visibilityState === 'visible' && lockoutRemaining() === 0) setTimeout(tryFingerprint, 250);
+  if (S.meta.prf) armAutoFingerprint(pad, tryFingerprint);
+}
+
+// Opens the fingerprint prompt by itself whenever the lock screen is on
+// screen: at app start and each time you come back to the app. Chrome only
+// allows the prompt in a focused window, so it waits briefly for focus.
+// After you cancel it, it does not reopen until you leave and come back.
+let autoFp = null;
+function armAutoFingerprint(pad, run) {
+  if (autoFp) autoFp.disarm();
+  let triedThisVisit = false;
+  let timer = 0;
+  const fire = () => {
+    if (!pad.el.isConnected) { disarm(); return; }
+    if (triedThisVisit || document.visibilityState !== 'visible' || lockoutRemaining() > 0) return;
+    triedThisVisit = true;
+    run();
+  };
+  const schedule = () => {
+    clearTimeout(timer);
+    if (document.hasFocus()) { timer = setTimeout(fire, 150); return; }
+    const onFocus = () => { window.removeEventListener('focus', onFocus); clearTimeout(timer); timer = setTimeout(fire, 150); };
+    window.addEventListener('focus', onFocus);
+    timer = setTimeout(() => { window.removeEventListener('focus', onFocus); fire(); }, 1200);
+  };
+  const onVis = () => {
+    if (document.visibilityState === 'hidden') { triedThisVisit = false; clearTimeout(timer); }
+    else schedule();
+  };
+  const onShow = (e) => { if (e.persisted) { triedThisVisit = false; schedule(); } };
+  document.addEventListener('visibilitychange', onVis);
+  window.addEventListener('pageshow', onShow);
+  function disarm() {
+    clearTimeout(timer);
+    document.removeEventListener('visibilitychange', onVis);
+    window.removeEventListener('pageshow', onShow);
+    if (autoFp && autoFp.disarm === disarm) autoFp = null;
+  }
+  autoFp = { disarm };
+  if (document.visibilityState === 'visible') schedule();
 }
 
 async function unlocked(dek) {
+  if (autoFp) autoFp.disarm();
   S.vault = await readVault(dek);
   S.dek = dek;
   const saved = S.vault.prefs.filters || {};
@@ -822,6 +868,11 @@ function registerSW() {
     reg.addEventListener('updatefound', () => {
       const w = reg.installing;
       w?.addEventListener('statechange', () => { if (w.state === 'installed' && navigator.serviceWorker.controller) offer(w); });
+    });
+    // An installed app can stay open in the background for days; check for a
+    // new version whenever it comes back to the foreground.
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') reg.update().catch(() => {});
     });
   }).catch(() => { /* offline support is optional */ });
   // Reload only when a new version replaces a running one. On the first visit the

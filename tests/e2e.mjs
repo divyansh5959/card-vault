@@ -449,6 +449,20 @@ try {
         await page.locator('#pageTitle', { hasText: 'Settings' }).waitFor({ timeout: 15000 });
         assert.equal(await page.locator('.pin-screen').count(), 0);
         log('fingerprint unlock: enrolled, then lock screen auto-unlocked through the passkey');
+        // Leave the app and come back after the auto-lock time: the prompt opens by itself.
+        let prompts = 0;
+        cdp.on('WebAuthn.credentialAsserted', () => { prompts++; });
+        await page.evaluate(() => {
+          Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+          document.dispatchEvent(new Event('visibilitychange'));
+          const realNow = Date.now; Date.now = () => realNow() + 120000;
+          Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+          document.dispatchEvent(new Event('visibilitychange'));
+          Date.now = realNow;
+        });
+        await page.locator('#pageTitle').waitFor({ timeout: 15000 });
+        assert.equal(await page.locator('.pin-screen').count(), 0, 'unlocked without tapping anything');
+        log('coming back to the app opens fingerprint unlock automatically');
       }
     } else {
       console.log('  fingerprint switch not shown (PRF capability not reported)');
