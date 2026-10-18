@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en-IN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; img-src 'self'; script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <title>Card Vault · Privacy</title>
+  <link rel="stylesheet" href="css/privacy.css">
+</head>
+<body>
+  <main>
+    <p><a href="./">← Back to Card Vault</a></p>
+    <h1>Privacy</h1>
+    <p>Card Vault has no server, no account and no analytics. The app is a set of static files; once loaded, it works offline.</p>
+    <h2>What is stored, and where</h2>
+    <ul>
+      <li>Your cards and gift vouchers are stored in this browser's local storage, encrypted with AES-256-GCM.</li>
+      <li>The encryption key is protected by your 6-digit PIN (PBKDF2-SHA256, 600,000 rounds), and optionally by a fingerprint passkey and a backup password. The PIN itself is never stored.</li>
+      <li>Theme, auto-lock time and the salts needed to unlock are stored unencrypted. They contain no card data.</li>
+    </ul>
+    <h2>What leaves the device</h2>
+    <p>Nothing, unless you export a file. Encrypted backups can only be opened with your backup password. The "readable JSON" export is plain text; treat it like a printout of your cards.</p>
+    <h2>Fingerprint unlock</h2>
+    <p>Fingerprint unlock uses a passkey created by your phone. The fingerprint never reaches the app; the phone only releases a key after it has checked you.</p>
+    <h2>Limits</h2>
+    <p>Anyone who knows your PIN, or has your unlocked phone with the app open, can see your cards. Someone who copies the browser's storage could try all one million 6-digit PINs offline, so keep your phone's own screen lock on and do not use Card Vault on shared computers.</p>
+  </main>
+</body>
+</html>
