@@ -1,6 +1,6 @@
 // Offline cache for the app shell. Card data never passes through here:
 // it lives in localStorage and the app makes no network requests for it.
-const VERSION = 'cv-1.0.0';
+const VERSION = 'cv-1.0.1';
 const SHELL = [
   './', './index.html', './privacy.html', './manifest.webmanifest', './css/app.css', './css/privacy.css',
   './js/app.js', './js/views.js', './js/ui.js', './js/pinpad.js', './js/icons.js',

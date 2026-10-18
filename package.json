@@ -1,6 +1,6 @@
 {
   "name": "card-vault",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Installable web app for credit, debit and gift cards, encrypted on the device.",
   "type": "module",

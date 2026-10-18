@@ -13,7 +13,7 @@ import { prfLikelySupported, enrollPrf, unlockWithPrf } from './passkey.js';
 import { WORDS } from './data.js';
 import { renderTab, openEditor, tabSummary, crossTabHits, TAB_META } from './views.js';
 
-export const VERSION = '1.0.0';
+export const VERSION = '1.0.1';
 const AUTO_LOCK_OPTIONS = [[0, 'Immediately'], [1, 'After 1 minute'], [5, 'After 5 minutes'], [15, 'After 15 minutes']];
 const IDLE_LOCK_MS = 10 * 60 * 1000;
 const MAX_FREE_TRIES = 5;
@@ -816,8 +816,13 @@ function registerSW() {
       w?.addEventListener('statechange', () => { if (w.state === 'installed' && navigator.serviceWorker.controller) offer(w); });
     });
   }).catch(() => { /* offline support is optional */ });
+  // Reload only when a new version replaces a running one. On the first visit the
+  // worker also claims the page, and reloading then would wipe a half-typed PIN.
+  const hadController = !!navigator.serviceWorker.controller;
   let reloaded = false;
-  navigator.serviceWorker.addEventListener('controllerchange', () => { if (!reloaded) { reloaded = true; location.reload(); } });
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (hadController && !reloaded) { reloaded = true; location.reload(); }
+  });
 }
 
 boot();
